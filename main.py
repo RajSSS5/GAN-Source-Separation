@@ -11,7 +11,10 @@ import models
 import datasets
 import util
 import separate
-
+import musdb
+import museval
+import numpy as np
+from numpy import mean
 
 def set_system_settings():
     sys.setrecursionlimit(50000)
@@ -41,6 +44,8 @@ def get_command_line_arguments():
     parser.add_option('--one_shot', dest='one_shot')
     parser.add_option('--mixture_input_path', dest='mixture_input_path')
     parser.add_option('--target_field_length', dest='target_field_length')
+    parser.add_option('--evaluate', dest='evaluate')
+    # parser.add_option('--evaluate_folder', dest='evaluate_folder')
 
     (options, args) = parser.parse_args()
 
@@ -174,9 +179,48 @@ def inference(config, cla):
                                                                  print_model_summary=cla.print_model_summary)
 
         print("Separating: " + filename)
-        separate.separate_sample(model, input, batch_size, output_filename_prefix,
-                                 config['dataset']['sample_rate'], output_folder_path, config['model']['type'])
+        
+        input_vocals, output_vocals_filepath, output_accompaniment_filepath = \
+             separate.separate_sample(model, input, batch_size, output_filename_prefix, 
+                                      config['dataset']['sample_rate'], 
+                                      output_folder_path, config['model']['type']
+                                    )
+        
+        print("Evaluating: " + filename)
+        # output_accompaniment_filename = output_filename_prefix + '_accompaniment.wav'
+        if cla.evaluate == "true":
+            # input_vocals_path = os.path.join(config['dataset']['path'], 'val', output_filename_prefix, 'vocals.wav')
+            # input_vocals = util.load_wav(input_vocals_path, config['dataset']['sample_rate'])
 
+            # output_vocals_filename = output_filename_prefix + '_vocals.wav'
+            # output_vocals_filepath = os.path.join(output_folder_path, output_vocals_filename)
+            output_vocals = util.load_wav(output_vocals_filepath, config['dataset']['sample_rate'])
+            # test_path = os.path.join(config["training"]["path"], 'samples', "samples (2500 epochs)", 'Al James - Schoolboy Facination_vocals.wav')
+            # output_vocals = util.load_wav(test_path, config['dataset']['sample_rate'])
+            
+            # compatible_length = min(input_vocals.shape[0],output_vocals.shape[0])
+
+            input_vocals = input_vocals.reshape((1, input_vocals.shape[0], 1))
+            output_vocals = output_vocals.reshape((1, output_vocals.shape[0], 1))
+
+            evaluate(config, input_vocals, output_vocals, output_filename_prefix)
+
+
+
+def evaluate(config, input_vocals, output_vocals, output_filename_prefix):
+    sdr, isr, sir, sar = museval.evaluate(references=input_vocals,estimates=output_vocals)
+    print(sdr)
+
+    avg_sdr = str(mean(sdr,  dtype=np.float64))
+    avg_isr = str(mean(isr,  dtype=np.float64))
+    avg_sir = str(mean(sir,  dtype=np.float64))
+    avg_sar = str(mean(sar,  dtype=np.float64))
+    fileWriteAvgs = avg_sdr + ',' + avg_isr + ',' + avg_sir + ',' + avg_sar + '\n' + 'SDR : ISR : SIR : SAR' + '\n'
+    output_filename = output_filename_prefix  + '.txt'
+    evaluate_output_path = os.path.join(config['training']['path'], 'evaluations', output_filename)
+    f = open(evaluate_output_path, "w")
+    f.write(fileWriteAvgs)
+    f.close()     
 
 def main():
 
@@ -188,6 +232,8 @@ def main():
         training(config, cla)
     elif cla.mode == 'inference':
         inference(config, cla)
+    # elif cla.mode == 'evaluate':
+    #     evaluate(config, cla)
 
 
 if __name__ == "__main__":

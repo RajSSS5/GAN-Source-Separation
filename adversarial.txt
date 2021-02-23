@@ -1,0 +1,5 @@
+python main.py --mode training --target singing-voice-adversarial --config config_singing_voice_adversarial.json
+
+python main.py --mode inference --config sessions/adversarial/config.json --mixture_input_path audio/
+
+python main.py --mode inference --config sessions/adversarial/config.json --mixture_input_path audio/ --evaluate true
