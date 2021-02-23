@@ -76,6 +76,8 @@ def separate_sample(model, input, batch_size, output_filename_prefix, sample_rat
         util.write_wav(vocals_output, output_vocals_filepath, sample_rate)
         util.write_wav(accompaniment_output, output_accompaniment_filepath, sample_rate)
 
+        return mixture_valid_signal, output_vocals_filepath, output_accompaniment_filepath
+
     if target == 'multi-instrument':
 
         if len(input['mixture']) < model.receptive_field_length:

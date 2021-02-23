@@ -654,17 +654,13 @@ class SingingVoiceSeparationAdversarial():
         self.config['model']['target_field_length'] = self.target_field_length
         self.config['model']['type'] = 'singing-voice-adversarial'
 
-        # Edits made here
+        # Edits made here #####################################
         self.generator = self.build_generator()
-        self.discriminator = self.build_discriminator()
+        self.discriminator_vocals = self.build_discriminator()
+        self.discriminator_acc = self.build_discriminator()
         self.current_loss_value = 0
-        # DEBUG
-        # print(self.generator.summary())
-        # print(self.discriminator.summary())
-
-        self.adv_weight = 0.01
-        #
-
+        self.adv_weight = 0.00001 * 0.25
+        #######################################################
         self.model = self.setup_model(load_checkpoint, print_model_summary)
 
         # Used for early stopping callback
@@ -711,18 +707,20 @@ class SingingVoiceSeparationAdversarial():
         if print_model_summary:
             model.summary()
             self.generator.summary()
-            self.discriminator.summary()
+            self.discriminator_vocals.summary()
+            self.discriminator_acc.summary()
 
-        model.compile(optimizer=self.optimizer,
-                        #util.segmentation loss
-                    # loss='binary_crossentropy'
-                    loss=['binary_crossentropy', util.adversarial_loss],
-                    loss_weights=[1, self.adv_weight]
-                      #metrics=self.metrics
-                      )
         # model.compile(optimizer=self.optimizer,
-        #               loss={'data_output_1': self.out_1_loss, 'data_output_2': self.out_2_loss,
-        #                     'data_output_3': self.out_3_loss}, metrics=self.metrics)
+        #                 #util.segmentation loss
+        #             # loss='binary_crossentropy'
+        #             loss=['binary_crossentropy', util.adversarial_loss],
+        #             loss_weights=[1, self.adv_weight]
+        #               #metrics=self.metrics
+        #               )
+        model.compile(optimizer=self.optimizer,
+                      loss=[self.out_1_loss, self.out_2_loss,util.adversarial_loss,util.adversarial_loss],
+                      loss_weights=[1, 1,self.adv_weight,self.adv_weight])
+        # metrics=self.metrics)
         # self.config['model']['num_params'] = model.count_params()
 
         config_path = os.path.join(self.config['training']['path'], 'config.json')
@@ -790,18 +788,19 @@ class SingingVoiceSeparationAdversarial():
 
             # Train discriminator
             d_loss = 0
-            d_loss_real = sum(self.discriminator.train_on_batch([vocals, accompaniments], [valid,valid]))
-            d_loss_gen = sum(self.discriminator.train_on_batch([generated_vocals, generated_accompaniments], [fake_gen,fake_gen]))
-            d_loss_mixed_1 = sum(self.discriminator.train_on_batch([generated_vocals, accompaniments], [fake_gen,valid]))
-            d_loss_mixed_2 = sum(self.discriminator.train_on_batch([vocals, generated_accompaniments], [valid,fake_gen]))
-            d_loss = np.add(d_loss_real,d_loss_gen)
-            d_loss = np.add(d_loss,d_loss_mixed_1)
-            d_loss = np.add(d_loss,d_loss_mixed_2)
+            d_loss_vocals_real = sum(self.discriminator_vocals.train_on_batch(vocals, valid))
+            d_loss_vocals_gen = sum(self.discriminator_vocals.train_on_batch(generated_vocals, fake_gen))
+            d_loss_acc_real = sum(self.discriminator_acc.train_on_batch(accompaniments, valid))
+            d_loss_acc_gen = sum(self.discriminator_acc.train_on_batch(generated_accompaniments, fake_gen))
+      
+            d_loss = np.add(d_loss_vocals_real,d_loss_vocals_gen)
+            d_loss = np.add(d_loss,d_loss_acc_real)
+            d_loss = np.add(d_loss,d_loss_acc_gen)
             d_loss *= 0.25
             # d_loss = 0.5 * np.add(d_loss_real, d_loss_gen)
 
             # Train generator
-            g_loss = self.model.train_on_batch(mixed, [valid, valid])
+            g_loss = self.model.train_on_batch(mixed, [vocals,accompaniments,valid, valid])
 
             self.current_loss_value = g_loss
 
@@ -829,11 +828,15 @@ class SingingVoiceSeparationAdversarial():
     def build_model(self):
         
         # semi_weight = 1
-        self.discriminator.compile(loss='binary_crossentropy',
+        self.discriminator_vocals.compile(loss='binary_crossentropy',
                                    optimizer=self.optimizer,
                                    metrics=['accuracy'])
-        # For the combined model we will only train the generator
-        self.discriminator.trainable = False
+        self.discriminator_acc.compile(loss='binary_crossentropy',
+                                   optimizer=self.optimizer,
+                                   metrics=['accuracy'])
+        self.discriminator_vocals.trainable = False
+        self.discriminator_acc.trainable = False
+
 
         #self.generator.compile(loss='binary_crossentropy',optimizer=self.optimizer)
 
@@ -843,10 +846,13 @@ class SingingVoiceSeparationAdversarial():
     
 
         # Feed to discriminator to get confidence maps
-        [confidence_map_vocals, confidence_map_acc] = self.discriminator([gen_output_vocals, gen_output_acc])
+        confidence_map_vocals = self.discriminator_vocals(gen_output_vocals)
+        confidence_map_acc = self.discriminator_acc(gen_output_acc)
 
-
-        return keras.models.Model( inputs=mixed_source, outputs=[confidence_map_vocals, confidence_map_acc])
+        # output_model = Model(input=[inputs], output=[intermediate_layer])
+        # return keras.models.Model( inputs=mixed_source, outputs=[confidence_map_vocals, confidence_map_acc])
+        # Using original loss
+        return keras.models.Model( inputs=mixed_source, outputs=[gen_output_vocals, gen_output_acc, confidence_map_vocals, confidence_map_acc])
 
         # loss={'data_output_1': self.out_1_loss, 'data_output_2': self.out_2_loss}
 
@@ -904,15 +910,20 @@ class SingingVoiceSeparationAdversarial():
         return keras.engine.Model(inputs=[data_input], outputs=[data_out_vocals, data_out_acc])
 
     def build_discriminator(self):
+        inp = keras.engine.Input(shape=(1603,))
+        data_out = self.discriminator_body(inp)
+        return keras.engine.Model(inp,data_out)
+
+    def build_multi_discriminator(self):
         vocals = keras.engine.Input(shape=(1603,), name='vocals')
         accompaniment = keras.engine.Input(shape=(1603,), name='accompaniment')
-
         data_out = self.discriminator_body(vocals,'vocals_out')
         data_out_acc = self.discriminator_body(accompaniment,'acc_out')
         
         return keras.engine.Model(inputs=[vocals, accompaniment], outputs=[data_out, data_out_acc])
 
-    def discriminator_body(self, inp,name):
+
+    def discriminator_body(self, inp,name='inp'):
         inp = layers.AddSingletonDepth()(inp)
         inp = keras.layers.Convolution1D(
                                             self.config['model']['filters']['depths']['res'],
